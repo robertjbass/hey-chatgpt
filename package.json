@@ -12,10 +12,8 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "@types/jsonstream": "^0.8.33",
     "@types/node": "^20.12.13",
     "@types/node-fetch": "^2.6.11",
-    "@types/node-wit": "^6.1.0",
     "nodemon": "^3.1.2",
     "typescript": "^5.4.5"
   },
