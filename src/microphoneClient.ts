@@ -1,5 +1,6 @@
 import fetch from "node-fetch";
 import mic from "mic";
+import { prompt } from "./openAi";
 
 const micSettings = {
   rate: "16000",
@@ -181,10 +182,15 @@ export class MicrophoneClient {
     console.log("Listening for command...");
   }
 
-  private onCommandDetected(command: string) {
+  private async onCommandDetected(command: string) {
     this.isListeningForCommand = false;
     console.log(
       `\n===================\n\nUSER ASKED: ${command}\n\n===================\n`
+    );
+
+    const response = await prompt(command);
+    console.log(
+      `\n===================\n\nAI RESPONSE: ${response}\n\n===================\n`
     );
   }
 }
