@@ -52,6 +52,12 @@ export class MicrophoneClient {
   }
 
   public init() {
+    this.wakeWordAudioBuffer = [];
+    this.isListeningForWakeWord = false;
+    this.isListeningForCommand = false;
+    this.wakeWordMicInstance = mic(micSettings);
+    this.commandMicInstance = mic(micSettings);
+
     this.listenForWakeWord();
   }
 
@@ -64,11 +70,14 @@ export class MicrophoneClient {
 
   private listenForWakeWord() {
     this.isListeningForWakeWord = true;
+    this.isListeningForCommand = false;
     this.logListeningState();
 
     const micInputStream = this.wakeWordMicInstance.getAudioStream();
+    micInputStream.removeAllListeners(); // Remove any existing listeners
     micInputStream.on("data", this.handleWakeWordData.bind(this));
     micInputStream.on("error", this.handleMicError.bind(this));
+    micInputStream.on("silence", () => {});
 
     this.wakeWordMicInstance.start();
     console.log("Listening for wake word...");
@@ -131,15 +140,16 @@ export class MicrophoneClient {
 
   private listenForCommand() {
     this.isListeningForCommand = true;
+    this.isListeningForWakeWord = false;
     this.logListeningState();
 
     const micInputStream = this.commandMicInstance.getAudioStream();
+    micInputStream.removeAllListeners(); // Remove any existing listeners
     let commandAudioBuffer: Buffer[] = [];
 
     micInputStream.on("data", (data: Buffer) => commandAudioBuffer.push(data));
-    micInputStream.on(
-      "silence",
-      this.handleCommandSilence.bind(this, commandAudioBuffer)
+    micInputStream.on("silence", () =>
+      this.handleCommandSilence(commandAudioBuffer)
     );
     micInputStream.on("error", this.handleMicError.bind(this));
 
@@ -186,11 +196,13 @@ export class MicrophoneClient {
 
     say.speak(response, "Samantha", 1.0, (err) => {
       if (err) {
-        return console.error(err);
+        console.error(err);
+      } else {
+        console.log("Text has been spoken.");
       }
 
-      console.log("Text has been spoken.");
-      this.listenForWakeWord();
+      // Reset the microphone client to listen for the wake word again
+      this.init();
     });
   }
 }
