@@ -35,3 +35,8 @@ pip install gtts
 **Voices**
 
 - TBD
+
+# TODO
+
+[ ] Find a neural TTS voice
+[ ] Set up support for streaming
