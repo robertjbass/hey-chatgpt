@@ -1,5 +1,6 @@
 import fetch from "node-fetch";
 import mic from "mic";
+import say from "say";
 import { prompt } from "./openAi";
 
 const micSettings = {
@@ -192,5 +193,16 @@ export class MicrophoneClient {
     console.log(
       `\n===================\n\nAI RESPONSE: ${response}\n\n===================\n`
     );
+
+    // Karen is another voice
+    say.speak(response, "Samantha", 1.0, (err) => {
+      if (err) {
+        return console.error(err);
+      }
+
+      console.log("Text has been spoken.");
+      // Restart listening for wake word
+      this.listenForWakeWord();
+    });
   }
 }
