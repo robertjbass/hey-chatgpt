@@ -23,24 +23,17 @@ async function parseResponseStream(
   const text = await response.text();
   const splitText = text.split("\r");
 
-  const responses = splitText
+  return splitText
     .filter((text) => text.trim() !== "")
     .map((text) => {
       try {
-        const parsedText = JSON.parse(text);
-        const confidenceString = text.includes("confidence")
-          ? text.split('"confidence": ')[1].split(",")[0].trim()
-          : "";
-        const confidence = confidenceString ? parseFloat(confidenceString) : 0;
-        return { ...parsedText, confidence };
+        return JSON.parse(text);
       } catch (error) {
         console.error("Error parsing JSON:", error);
         return null;
       }
     })
-    .filter((response) => response);
-
-  return responses;
+    .filter((response) => response !== null) as ResponseObject[];
 }
 
 export class MicrophoneClient {
@@ -49,10 +42,8 @@ export class MicrophoneClient {
 
   private accessToken: string = "";
   private wakeWordAudioBuffer: Buffer[] = [];
-
   private isListeningForWakeWord: boolean = false;
   private isListeningForCommand: boolean = false;
-
   private wakeWordMicInstance = mic(micSettings);
   private commandMicInstance = mic(micSettings);
 
@@ -73,59 +64,60 @@ export class MicrophoneClient {
 
   private listenForWakeWord() {
     this.isListeningForWakeWord = true;
-
     this.logListeningState();
 
     const micInputStream = this.wakeWordMicInstance.getAudioStream();
-
-    micInputStream.on("data", (data: Buffer) => {
-      // Accumulate audio data
-      this.wakeWordAudioBuffer.push(data);
-
-      // Process the audio data every second
-      if (this.wakeWordAudioBuffer.length >= 10) {
-        const audioBufferCombined = Buffer.concat(this.wakeWordAudioBuffer);
-        this.wakeWordAudioBuffer = []; // Clear the buffer
-
-        // Send the combined audio buffer to Wit.ai
-        fetch("https://api.wit.ai/speech?v=20240530", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.accessToken}`,
-            "Content-Type": "audio/wav",
-          },
-          body: audioBufferCombined,
-        })
-          .then(async (response) => {
-            const responses = await parseResponseStream(response);
-
-            responses.forEach((jsonObject) => {
-              if (
-                jsonObject.intents &&
-                jsonObject.intents.length > 0 &&
-                jsonObject.intents[0].name ===
-                  MicrophoneClient.WAKE_WORD_INTENT &&
-                jsonObject.intents[0].confidence >=
-                  MicrophoneClient.CONFIDENCE_THRESHOLD &&
-                jsonObject.type === "FINAL_UNDERSTANDING"
-              ) {
-                console.log(jsonObject);
-                this.onWakeWordDetected();
-              }
-            });
-          })
-          .catch((err: Error) => {
-            console.error("Error in Speech Recognition:", err);
-          });
-      }
-    });
-
-    micInputStream.on("error", (err: Error) => {
-      console.error("Error in Input Stream:", err);
-    });
+    micInputStream.on("data", this.handleWakeWordData.bind(this));
+    micInputStream.on("error", this.handleMicError.bind(this));
 
     this.wakeWordMicInstance.start();
     console.log("Listening for wake word...");
+  }
+
+  private handleWakeWordData(data: Buffer) {
+    this.wakeWordAudioBuffer.push(data);
+
+    if (this.wakeWordAudioBuffer.length >= 10) {
+      const audioBufferCombined = Buffer.concat(this.wakeWordAudioBuffer);
+      this.wakeWordAudioBuffer = [];
+
+      fetch("https://api.wit.ai/speech?v=20240530", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          "Content-Type": "audio/wav",
+        },
+        body: audioBufferCombined,
+      })
+        .then(this.handleWakeWordResponse.bind(this))
+        .catch(this.handleFetchError.bind(this));
+    }
+  }
+
+  private async handleWakeWordResponse(response: fetch.Response) {
+    const responses = await parseResponseStream(response);
+
+    responses.forEach((jsonObject) => {
+      if (
+        jsonObject.intents &&
+        jsonObject.intents.length > 0 &&
+        jsonObject.intents[0].name === MicrophoneClient.WAKE_WORD_INTENT &&
+        jsonObject.intents[0].confidence >=
+          MicrophoneClient.CONFIDENCE_THRESHOLD &&
+        jsonObject.type === "FINAL_UNDERSTANDING"
+      ) {
+        console.log(jsonObject);
+        this.onWakeWordDetected();
+      }
+    });
+  }
+
+  private handleFetchError(err: Error) {
+    console.error("Error in Speech Recognition:", err);
+  }
+
+  private handleMicError(err: Error) {
+    console.error("Error in Input Stream:", err);
   }
 
   private onWakeWordDetected() {
@@ -139,48 +131,46 @@ export class MicrophoneClient {
 
   private listenForCommand() {
     this.isListeningForCommand = true;
-
     this.logListeningState();
 
     const micInputStream = this.commandMicInstance.getAudioStream();
     let commandAudioBuffer: Buffer[] = [];
 
-    micInputStream.on("data", (data: Buffer) => {
-      commandAudioBuffer.push(data);
-    });
-
-    micInputStream.on("silence", async () => {
-      const commandAudioBufferCombined = Buffer.concat(commandAudioBuffer);
-      commandAudioBuffer = []; // Clear the buffer
-
-      try {
-        const response = await fetch("https://api.wit.ai/speech?v=20240530", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.accessToken}`,
-            "Content-Type": "audio/wav",
-          },
-          body: commandAudioBufferCombined,
-        });
-
-        const responses = await parseResponseStream(response);
-        const finalResponse = responses.find(
-          (response) => response.type === "FINAL_UNDERSTANDING"
-        );
-        this.onCommandDetected(finalResponse?.text || "");
-      } catch (err: any) {
-        console.error("Error in Command Recognition:", err);
-      }
-
-      this.commandMicInstance.stop();
-    });
-
-    micInputStream.on("error", (err: Error) => {
-      console.error("Error in Input Stream:", err);
-    });
+    micInputStream.on("data", (data: Buffer) => commandAudioBuffer.push(data));
+    micInputStream.on(
+      "silence",
+      this.handleCommandSilence.bind(this, commandAudioBuffer)
+    );
+    micInputStream.on("error", this.handleMicError.bind(this));
 
     this.commandMicInstance.start();
     console.log("Listening for command...");
+  }
+
+  private async handleCommandSilence(commandAudioBuffer: Buffer[]) {
+    const commandAudioBufferCombined = Buffer.concat(commandAudioBuffer);
+    commandAudioBuffer.length = 0;
+
+    try {
+      const response = await fetch("https://api.wit.ai/speech?v=20240530", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          "Content-Type": "audio/wav",
+        },
+        body: commandAudioBufferCombined,
+      });
+
+      const responses = await parseResponseStream(response);
+      const finalResponse = responses.find(
+        (response) => response.type === "FINAL_UNDERSTANDING"
+      );
+      this.onCommandDetected(finalResponse?.text || "");
+    } catch (err: any) {
+      console.error("Error in Command Recognition:", err);
+    }
+
+    this.commandMicInstance.stop();
   }
 
   private async onCommandDetected(command: string) {
@@ -194,14 +184,12 @@ export class MicrophoneClient {
       `\n===================\n\nAI RESPONSE: ${response}\n\n===================\n`
     );
 
-    // Karen is another voice
     say.speak(response, "Samantha", 1.0, (err) => {
       if (err) {
         return console.error(err);
       }
 
       console.log("Text has been spoken.");
-      // Restart listening for wake word
       this.listenForWakeWord();
     });
   }
